@@ -22,6 +22,7 @@ db.serialize(() => {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     upvotes INTEGER DEFAULT 0,
     downvotes INTEGER DEFAULT 0,
+    isVotingActive BOOLEAN DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
@@ -31,13 +32,16 @@ db.serialize(() => {
     if (err) {
       console.error("Error checking votes:", err);
     } else if (row.count === 0) {
-      db.run("INSERT INTO votes (upvotes, downvotes) VALUES (0, 0)", (err) => {
-        if (err) {
-          console.error("Error inserting initial votes:", err);
-        } else {
-          console.log("Initial vote record inserted");
+      db.run(
+        "INSERT INTO votes (upvotes, downvotes, isVotingActive) VALUES (0, 0, 1)",
+        (err) => {
+          if (err) {
+            console.error("Error inserting initial votes:", err);
+          } else {
+            console.log("Initial vote record inserted");
+          }
         }
-      });
+      );
     }
   });
 });
@@ -47,7 +51,7 @@ db.serialize(() => {
 // Get current vote counts
 app.get("/get-vote", (req, res) => {
   db.get(
-    "SELECT upvotes, downvotes FROM votes ORDER BY updated_at DESC LIMIT 1",
+    "SELECT upvotes, downvotes, isVotingActive FROM votes ORDER BY updated_at DESC LIMIT 1",
     (err, row) => {
       if (err) {
         console.error("Error fetching votes:", err);
@@ -56,6 +60,7 @@ app.get("/get-vote", (req, res) => {
         res.json({
           upvotes: row ? row.upvotes : 0,
           downvotes: row ? row.downvotes : 0,
+          isVotingActive: row ? Boolean(row.isVotingActive) : true,
         });
       }
     }
@@ -64,59 +69,141 @@ app.get("/get-vote", (req, res) => {
 
 // Upvote
 app.post("/upvote", (req, res) => {
+  // First check if voting is active
+  db.get("SELECT isVotingActive FROM votes WHERE id = 1", (err, row) => {
+    if (err) {
+      console.error("Error checking voting status:", err);
+      res.status(500).json({ error: "Failed to check voting status" });
+      return;
+    }
+
+    if (!row || !row.isVotingActive) {
+      res.status(403).json({ error: "Voting is currently disabled" });
+      return;
+    }
+
+    // Proceed with upvote
+    db.run(
+      "UPDATE votes SET upvotes = upvotes + 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+      function (err) {
+        if (err) {
+          console.error("Error upvoting:", err);
+          res.status(500).json({ error: "Failed to upvote" });
+        } else {
+          // Get updated counts
+          db.get(
+            "SELECT upvotes, downvotes, isVotingActive FROM votes WHERE id = 1",
+            (err, row) => {
+              if (err) {
+                console.error("Error fetching updated votes:", err);
+                res
+                  .status(500)
+                  .json({ error: "Failed to fetch updated votes" });
+              } else {
+                res.json({
+                  success: true,
+                  upvotes: row.upvotes,
+                  downvotes: row.downvotes,
+                  isVotingActive: Boolean(row.isVotingActive),
+                });
+              }
+            }
+          );
+        }
+      }
+    );
+  });
+});
+
+// Downvote
+app.post("/downvote", (req, res) => {
+  // First check if voting is active
+  db.get("SELECT isVotingActive FROM votes WHERE id = 1", (err, row) => {
+    if (err) {
+      console.error("Error checking voting status:", err);
+      res.status(500).json({ error: "Failed to check voting status" });
+      return;
+    }
+
+    if (!row || !row.isVotingActive) {
+      res.status(403).json({ error: "Voting is currently disabled" });
+      return;
+    }
+
+    // Proceed with downvote
+    db.run(
+      "UPDATE votes SET downvotes = downvotes + 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+      function (err) {
+        if (err) {
+          console.error("Error downvoting:", err);
+          res.status(500).json({ error: "Failed to downvote" });
+        } else {
+          // Get updated counts
+          db.get(
+            "SELECT upvotes, downvotes, isVotingActive FROM votes WHERE id = 1",
+            (err, row) => {
+              if (err) {
+                console.error("Error fetching updated votes:", err);
+                res
+                  .status(500)
+                  .json({ error: "Failed to fetch updated votes" });
+              } else {
+                res.json({
+                  success: true,
+                  upvotes: row.upvotes,
+                  downvotes: row.downvotes,
+                  isVotingActive: Boolean(row.isVotingActive),
+                });
+              }
+            }
+          );
+        }
+      }
+    );
+  });
+});
+
+// Reset votes
+app.post("/reset", (req, res) => {
   db.run(
-    "UPDATE votes SET upvotes = upvotes + 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+    "UPDATE votes SET upvotes = 0, downvotes = 0, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
     function (err) {
       if (err) {
-        console.error("Error upvoting:", err);
-        res.status(500).json({ error: "Failed to upvote" });
+        console.error("Error resetting votes:", err);
+        res.status(500).json({ error: "Failed to reset votes" });
       } else {
-        // Get updated counts
-        db.get(
-          "SELECT upvotes, downvotes FROM votes WHERE id = 1",
-          (err, row) => {
-            if (err) {
-              console.error("Error fetching updated votes:", err);
-              res.status(500).json({ error: "Failed to fetch updated votes" });
-            } else {
-              res.json({
-                success: true,
-                upvotes: row.upvotes,
-                downvotes: row.downvotes,
-              });
-            }
-          }
-        );
+        res.json({
+          success: true,
+          upvotes: 0,
+          downvotes: 0,
+        });
       }
     }
   );
 });
 
-// Downvote
-app.post("/downvote", (req, res) => {
+// Toggle voting active status
+app.post("/toggle-voting", (req, res) => {
+  const { isVotingActive } = req.body;
+
+  if (typeof isVotingActive !== "boolean") {
+    return res
+      .status(400)
+      .json({ error: "isVotingActive must be a boolean value" });
+  }
+
   db.run(
-    "UPDATE votes SET downvotes = downvotes + 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+    "UPDATE votes SET isVotingActive = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+    [isVotingActive ? 1 : 0],
     function (err) {
       if (err) {
-        console.error("Error downvoting:", err);
-        res.status(500).json({ error: "Failed to downvote" });
+        console.error("Error toggling voting status:", err);
+        res.status(500).json({ error: "Failed to toggle voting status" });
       } else {
-        // Get updated counts
-        db.get(
-          "SELECT upvotes, downvotes FROM votes WHERE id = 1",
-          (err, row) => {
-            if (err) {
-              console.error("Error fetching updated votes:", err);
-              res.status(500).json({ error: "Failed to fetch updated votes" });
-            } else {
-              res.json({
-                success: true,
-                upvotes: row.upvotes,
-                downvotes: row.downvotes,
-              });
-            }
-          }
-        );
+        res.json({
+          success: true,
+          isVotingActive: isVotingActive,
+        });
       }
     }
   );
