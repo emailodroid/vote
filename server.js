@@ -27,6 +27,43 @@ db.serialize(() => {
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Check if isVotingActive column exists, if not add it (for existing databases)
+  db.all("PRAGMA table_info(votes)", (err, columns) => {
+    if (err) {
+      console.error("Error getting table columns:", err);
+    } else {
+      const hasIsVotingActive = columns.some(
+        (col) => col.name === "isVotingActive"
+      );
+      if (!hasIsVotingActive) {
+        console.log("Adding isVotingActive column to existing table...");
+        db.run(
+          "ALTER TABLE votes ADD COLUMN isVotingActive BOOLEAN DEFAULT 1",
+          (err) => {
+            if (err) {
+              console.error("Error adding isVotingActive column:", err);
+            } else {
+              console.log("isVotingActive column added successfully");
+              // Update existing records to have isVotingActive = 1
+              db.run(
+                "UPDATE votes SET isVotingActive = 1 WHERE isVotingActive IS NULL",
+                (err) => {
+                  if (err) {
+                    console.error("Error updating existing records:", err);
+                  } else {
+                    console.log(
+                      "Existing records updated with isVotingActive = 1"
+                    );
+                  }
+                }
+              );
+            }
+          }
+        );
+      }
+    }
+  });
+
   // Insert initial vote record if table is empty
   db.get("SELECT COUNT(*) as count FROM votes", (err, row) => {
     if (err) {
